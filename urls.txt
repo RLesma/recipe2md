@@ -1,0 +1,2 @@
+# Add one recipe URL per line. Blank lines and lines starting with # are ignored.
+https://elpais.com/gastronomia/recetas/2021/09/30/receta/1633022593_843329.html
