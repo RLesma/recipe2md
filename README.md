@@ -11,7 +11,7 @@ Own your own recipes! This is a script that extracts a recipe from a website and
   - **Contexto**: Introductory story/notes from the article
   - **Ingredientes**: Preserves sub-sections (e.g. *Emplatado*, *Para la salsa*)
   - **Preparación**: Numbered step-by-step instructions
-- **Local images for reliable PDF printing**: Downloads images into an `images/` subfolder inside your recipes folder and links them with relative Markdown (`![Title](images/slug.jpg)`), so Obsidian Reading View and **Export to PDF** work offline.
+- **Local images for reliable PDF printing**: Downloads images directly into your `--output-dir` alongside the Markdown file and links them with relative Markdown (`![Title](slug.jpg)`), so Obsidian Reading View and **Export to PDF** work offline.
 
 ## Usage
 
@@ -31,8 +31,8 @@ python3 recipe_to_md.py -o ~/path/to/ObsidianVault/Recetas \
 ### Options
 
 - `-f, --file`: Text file with one URL per line (`#` comments supported), or `-` for stdin.
-- `-o, --output-dir`: Destination folder for `.md` files (default: `./recipes`).
-- `--images-dir`: Subfolder for downloaded images inside `--output-dir` (default: `images`).
+- `-o, --output-dir`: Destination folder for `.md` files and images (default: `./recipes`).
+- `--images-dir`: Optional subfolder for downloaded images inside `--output-dir` (default: same folder as Markdown).
 - `--no-download-images`: Keep remote image URLs instead of downloading them locally.
 - `--checkboxes`: Use `- [ ]` checkboxes for ingredients instead of `-` bullets.
 - `--overwrite`: Overwrite existing `.md` files with the same filename.
@@ -41,4 +41,4 @@ python3 recipe_to_md.py -o ~/path/to/ObsidianVault/Recetas \
 
 1. Open the recipe note in **Reading View** (`Cmd + E` on macOS).
 2. Use `Cmd + P` or **More options (`...`) → Export to PDF...**
-3. Standard Markdown links `![...](images/...)` ensure images appear cleanly in the exported PDF.
+3. Standard Markdown links `![...](slug.jpg)` ensure images appear cleanly in the exported PDF.

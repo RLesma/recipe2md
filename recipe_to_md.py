@@ -682,12 +682,21 @@ def process_url(
         md_path = out_dir / f"{slug}-{suffix}.md"
         slug = f"{slug}-{suffix}"
 
-    images_dir = out_dir / images_subdir
+    subdir = images_subdir.strip("/").strip()
+    if subdir in ("", "."):
+        subdir = ""
+        images_dir = out_dir
+    else:
+        images_dir = out_dir / subdir
+
+    def format_img_ref(filename: str) -> str:
+        return f"{subdir}/{filename}" if subdir else filename
+
     hero_ref: Optional[str] = None
     if recipe.get("hero_image"):
         if download_images:
             fname = download_image(recipe["hero_image"], images_dir, slug)
-            hero_ref = f"{images_subdir}/{fname}" if fname else recipe["hero_image"]
+            hero_ref = format_img_ref(fname) if fname else recipe["hero_image"]
         else:
             hero_ref = recipe["hero_image"]
 
@@ -699,7 +708,7 @@ def process_url(
         seen_urls.add(img_url)
         if download_images:
             fname = download_image(img_url, images_dir, f"{slug}-{idx}")
-            ref = f"{images_subdir}/{fname}" if fname else img_url
+            ref = format_img_ref(fname) if fname else img_url
         else:
             ref = img_url
         inline_refs.append((ref, alt))
@@ -753,8 +762,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--images-dir",
-        default="images",
-        help="Subfolder inside output-dir for downloaded images (default: images).",
+        default="",
+        help="Optional subfolder inside output-dir for downloaded images (default: same folder as Markdown).",
     )
     parser.add_argument(
         "--no-download-images",
