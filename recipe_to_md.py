@@ -661,6 +661,30 @@ def render_markdown(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def index_existing_sources(out_dir: Path) -> Dict[str, Path]:
+    """Map normalized source URLs from existing Markdown frontmatter in out_dir."""
+    sources: Dict[str, Path] = {}
+    if not out_dir.exists():
+        return sources
+    for md_file in out_dir.glob("*.md"):
+        try:
+            with md_file.open("r", encoding="utf-8", errors="replace") as fh:
+                first_line = fh.readline().strip()
+                if first_line != "---":
+                    continue
+                for line in fh:
+                    stripped = line.strip()
+                    if stripped == "---":
+                        break
+                    m = re.match(r'^source:\s*["\']?(.*?)["\']?\s*$', stripped)
+                    if m and m.group(1):
+                        sources[m.group(1)] = md_file
+                        break
+        except OSError:
+            continue
+    return sources
+
+
 def process_url(
     url: str,
     out_dir: Path,
@@ -796,11 +820,17 @@ def main() -> int:
         return 1
 
     out_dir = Path(args.output_dir).expanduser().resolve()
+    existing_sources = index_existing_sources(out_dir)
     succeeded = 0
+    skipped = 0
     failed_urls: List[Tuple[str, str]] = []
     for url in urls:
+        if not args.overwrite and url in existing_sources:
+            print(f"Skipping (already exists): {url} -> {existing_sources[url].name}")
+            skipped += 1
+            continue
         try:
-            process_url(
+            md_path = process_url(
                 url=url,
                 out_dir=out_dir,
                 images_subdir=args.images_dir,
@@ -808,6 +838,7 @@ def main() -> int:
                 use_checkboxes=args.checkboxes,
                 overwrite=args.overwrite,
             )
+            existing_sources[url] = md_path
             succeeded += 1
         except Exception as exc:
             failed_urls.append((url, str(exc)))
@@ -821,13 +852,13 @@ def main() -> int:
         ]
         error_path.write_text("\n".join(error_lines), encoding="utf-8")
         print(
-            f"\nDone: {succeeded} succeeded, {len(failed_urls)} failed. "
+            f"\nDone: {succeeded} succeeded, {skipped} skipped, {len(failed_urls)} failed. "
             f"Failed URLs saved to {error_path}",
             file=sys.stderr,
         )
         return 1
 
-    print(f"\nDone: {succeeded} succeeded, 0 failed.")
+    print(f"\nDone: {succeeded} succeeded, {skipped} skipped, 0 failed.")
     return 0
 
 
