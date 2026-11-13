@@ -673,6 +673,8 @@ def process_url(
     raw_bytes = fetch_url(url)
     raw_html = raw_bytes.decode("utf-8", errors="replace")
     recipe = extract_recipe(url, raw_html)
+    if not recipe["ingredient_sections"] and not recipe["instructions"]:
+        raise ValueError("No ingredients or instructions could be extracted")
 
     slug = slugify(recipe["title"])
     md_path = out_dir / f"{slug}.md"
@@ -780,6 +782,12 @@ def main() -> int:
         action="store_true",
         help="Overwrite existing Markdown files with the same slug.",
     )
+    parser.add_argument(
+        "-e",
+        "--error-file",
+        default="errors.txt",
+        help="Path to write failed URLs (default: errors.txt).",
+    )
     args = parser.parse_args()
 
     urls = load_urls(args)
@@ -788,7 +796,8 @@ def main() -> int:
         return 1
 
     out_dir = Path(args.output_dir).expanduser().resolve()
-    failures = 0
+    succeeded = 0
+    failed_urls: List[Tuple[str, str]] = []
     for url in urls:
         try:
             process_url(
@@ -799,11 +808,27 @@ def main() -> int:
                 use_checkboxes=args.checkboxes,
                 overwrite=args.overwrite,
             )
+            succeeded += 1
         except Exception as exc:
-            failures += 1
+            failed_urls.append((url, str(exc)))
             print(f"  [error] Failed {url}: {exc}", file=sys.stderr)
 
-    return 1 if failures else 0
+    if failed_urls:
+        error_path = Path(args.error_file).expanduser().resolve()
+        error_path.parent.mkdir(parents=True, exist_ok=True)
+        error_lines = [
+            f"# {reason}\n{url}\n" for url, reason in failed_urls
+        ]
+        error_path.write_text("\n".join(error_lines), encoding="utf-8")
+        print(
+            f"\nDone: {succeeded} succeeded, {len(failed_urls)} failed. "
+            f"Failed URLs saved to {error_path}",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"\nDone: {succeeded} succeeded, 0 failed.")
+    return 0
 
 
 if __name__ == "__main__":

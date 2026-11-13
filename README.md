@@ -36,6 +36,7 @@ python3 recipe_to_md.py -o ~/path/to/ObsidianVault/Recetas \
 - `--no-download-images`: Keep remote image URLs instead of downloading them locally.
 - `--checkboxes`: Use `- [ ]` checkboxes for ingredients instead of `-` bullets.
 - `--overwrite`: Overwrite existing `.md` files with the same filename.
+- `-e, --error-file`: File where failed URLs are saved (default: `errors.txt`). You can retry them later with `python3 recipe_to_md.py -f errors.txt`.
 
 ## Tips for Printing to PDF in Obsidian
 
