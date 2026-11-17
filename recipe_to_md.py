@@ -76,16 +76,27 @@ def yaml_escape(value: str) -> str:
     return f'"{escaped}"'
 
 
+def _parse_json_lenient(raw: str) -> Any:
+    text = raw.strip()
+    try:
+        return json.loads(text, strict=False)
+    except json.JSONDecodeError:
+        # Strip JS-style comments and trailing commas often found in WordPress JSON-LD
+        cleaned = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+        return json.loads(cleaned, strict=False)
+
+
 def extract_json_ld(raw_html: str) -> List[Dict[str, Any]]:
     blocks = re.findall(
-        r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        r'<script[^>]*type=["\']?application/ld\+json[^"\'>]*["\']?[^>]*>(.*?)</script>',
         raw_html,
         re.S | re.I,
     )
     items: List[Dict[str, Any]] = []
     for block in blocks:
         try:
-            data = json.loads(block.strip())
+            data = _parse_json_lenient(block)
         except json.JSONDecodeError:
             continue
         stack = [data]
@@ -378,6 +389,120 @@ class ElComidistaBodyParser(HTMLParser):
                 self.p_buf.append(data)
 
 
+def _strip_tags(fragment: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", fragment)
+    return clean_whitespace(text)
+
+
+def extract_legacy_html_recipe(
+    raw_html: str,
+) -> Tuple[List[str], List[Tuple[Optional[str], List[str]]], List[str]]:
+    """Fallback for older El Comidista posts, generic recipe blogs, and microdata."""
+    # 1. Try microdata itemprop="recipeIngredient" / "recipeInstructions"
+    micro_ings = [
+        _strip_tags(m)
+        for m in re.findall(
+            r'<[^>]+itemprop=["\']?recipeIngredient["\']?[^>]*>(.*?)</(?:li|span|p|div)>',
+            raw_html,
+            re.S | re.I,
+        )
+        if _strip_tags(m)
+    ]
+    micro_inst = [
+        _strip_tags(m)
+        for m in re.findall(
+            r'<[^>]+itemprop=["\']?recipeInstructions["\']?[^>]*>(.*?)</(?:li|span|p|div|ol)>',
+            raw_html,
+            re.S | re.I,
+        )
+        if _strip_tags(m)
+    ]
+
+    # 2. Scan article body for "Ingredientes" and "Preparación"/"Elaboración"/"Instrucciones"
+    body_match = re.search(
+        r'<div[^>]+(?:data-dtm-region=["\']?articulo_cuerpo["\']?|class=["\'][^"\']*\ba_c\b[^"\']*["\'])[^>]*>(.*?)(?:<aside\b|</article>)',
+        raw_html,
+        re.S | re.I,
+    )
+    scope = body_match.group(1) if body_match else raw_html
+
+    # Tokenize relevant block tags in order: h2/h3/h4, p, ul, ol
+    tokens = re.findall(
+        r"<(h[2-4]|p|ul|ol)\b[^>]*>(.*?)</\1>",
+        scope,
+        re.S | re.I,
+    )
+
+    context_paras: List[str] = []
+    ing_sections: List[Tuple[Optional[str], List[str]]] = []
+    instructions: List[str] = []
+
+    mode = "context"
+    curr_heading: Optional[str] = None
+    curr_items: List[str] = []
+
+    ing_re = re.compile(r"^ingredientes?\b", re.I)
+    inst_re = re.compile(r"^(?:preparaci[oó]n|elaboraci[oó]n|instrucciones|c[oó]mo\s+hacer)\b", re.I)
+    stop_re = re.compile(r"^(?:comentarios|sobre\s+la\s+firma|contenido\s+relacionado|noticias\s+relacionadas)\b", re.I)
+
+    for tag, inner in tokens:
+        tag_l = tag.lower()
+        txt = _strip_tags(inner)
+        if not txt:
+            continue
+
+        is_bold_p = tag_l == "p" and bool(
+            re.match(r"^\s*<(?:strong|b)\b[^>]*>.*</(?:strong|b)>\s*$", inner, re.S | re.I)
+        )
+        is_heading_like = tag_l in ("h2", "h3", "h4") or is_bold_p
+
+        if is_heading_like:
+            if stop_re.match(txt):
+                break
+            if ing_re.match(txt):
+                mode = "ingredients"
+                continue
+            if inst_re.match(txt):
+                if curr_items:
+                    ing_sections.append((curr_heading, curr_items))
+                    curr_heading = None
+                    curr_items = []
+                mode = "instructions"
+                continue
+
+        if mode == "context":
+            if tag_l == "p":
+                context_paras.append(txt)
+        elif mode == "ingredients":
+            if tag_l == "ul":
+                lis = [_strip_tags(li) for li in re.findall(r"<li\b[^>]*>(.*?)</li>", inner, re.S | re.I)]
+                lis = [x for x in lis if x]
+                if lis:
+                    ing_sections.append((curr_heading, lis))
+                    curr_heading = None
+            elif tag_l in ("p", "h3", "h4") and len(txt) < 80:
+                curr_heading = txt
+        elif mode == "instructions":
+            if tag_l == "ol":
+                lis = [_strip_tags(li) for li in re.findall(r"<li\b[^>]*>(.*?)</li>", inner, re.S | re.I)]
+                instructions.extend([x for x in lis if x])
+            elif tag_l == "p" and not txt.startswith("*"):
+                # Strip leading "1. " if already numbered
+                step = re.sub(r"^\d+[\.\)]\s*", "", txt)
+                if step:
+                    instructions.append(step)
+
+    if curr_items:
+        ing_sections.append((curr_heading, curr_items))
+
+    if not ing_sections and micro_ings:
+        ing_sections = [(None, micro_ings)]
+    if not instructions and micro_inst:
+        instructions = micro_inst
+
+    return (context_paras if body_match else [], ing_sections, instructions)
+
+
 def parse_instructions_from_jsonld(raw_inst: Any) -> List[str]:
     steps: List[str] = []
     if not raw_inst:
@@ -503,6 +628,16 @@ def extract_recipe(url: str, raw_html: str) -> Dict[str, Any]:
     if not instructions and recipe_ld and recipe_ld.get("recipeInstructions"):
         instructions = parse_instructions_from_jsonld(recipe_ld["recipeInstructions"])
 
+    # Legacy El Comidista / generic HTML heading+list & microdata fallback
+    if not ingredient_sections and not instructions:
+        leg_ctx, leg_ings, leg_inst = extract_legacy_html_recipe(raw_html)
+        if leg_ings:
+            ingredient_sections = leg_ings
+        if leg_inst:
+            instructions = leg_inst
+        if leg_ctx and (not context_paragraphs or len(leg_ctx) < len(context_paragraphs)):
+            context_paragraphs = leg_ctx
+
     # Tags
     tags = ["receta"]
     if "elpais.com" in url or "elcomidista" in url:
@@ -544,9 +679,18 @@ def guess_image_ext(url: str, content_type: str = "") -> str:
     return ".jpg"
 
 
+def _encode_url_path(url: str) -> str:
+    parts = urllib.parse.urlsplit(url)
+    encoded_path = urllib.parse.quote(parts.path, safe="/%")
+    return urllib.parse.urlunsplit(
+        (parts.scheme, parts.netloc, encoded_path, parts.query, parts.fragment)
+    )
+
+
 def download_image(url: str, dest_dir: Path, base_name: str) -> Optional[str]:
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        safe_url = _encode_url_path(url)
+        req = urllib.request.Request(safe_url, headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=20) as resp:
             data = resp.read()
             ct = resp.headers.get("Content-Type", "")
@@ -757,7 +901,9 @@ def load_urls(args: argparse.Namespace) -> List[str]:
             lines = Path(args.file).read_text(encoding="utf-8").splitlines()
         for line in lines:
             line = line.strip()
-            if line and not line.startswith("#"):
+            if not line or line.startswith("#"):
+                continue
+            if re.match(r"^https?://", line, re.I):
                 urls.append(line)
     urls.extend(args.urls)
     # Deduplicate while preserving order
