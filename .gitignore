@@ -223,4 +223,5 @@ __marimo__/
 recipes/
 errors.txt
 .DS_Store
-failed_*.txt
+failed_*
+input_htmls/
