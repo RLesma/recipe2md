@@ -1,0 +1,11 @@
+# Dead Domains and Broken Links (3)
+# Why they failed:
+#   - HTTP 404 Not Found: the page was deleted or moved without a redirect.
+#   - Errno 8 (nodename nor servname provided): the domain no longer resolves / is offline.
+
+# HTTP 404 Not Found
+http://www.restaurantecasagerardo.es/recetas/receta-arroz-con-leche/
+
+# Domain no longer resolves (DNS Errno 8)
+https://sabrosum.com/arroz-pollo-agridulce-dabiz-munoz/
+https://gratiafood.com/es/guia-dim-sum/

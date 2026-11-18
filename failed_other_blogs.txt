@@ -1,0 +1,11 @@
+# Other Blogs with Custom Markup or Listicle Format (4)
+# Why they failed:
+#   - mercadocalabajio.com: custom Blogger HTML without standard JSON-LD Recipe or
+#     explicit "Ingredientes" / "Preparación" headings.
+#   - javirecetas.com: malformed JSON-LD (unquoted/syntax error) and custom HTML layout.
+#   - lidiafolgar.es: listicle of 60 breakfast ideas rather than a single recipe.
+
+http://www.mercadocalabajio.com/2016/10/bocadillo-phily-cheesesteak-un-sabroso_13.html?m=1
+http://www.mercadocalabajio.com/2016/10/bocadillo-phily-cheesesteak-un-sabroso_13.html
+https://www.javirecetas.com/papas-con-carne-nueva-receta/
+https://www.lidiafolgar.es/sesenta-desayunos-sanos-para-compartir-en-familia/
