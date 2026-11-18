@@ -829,26 +829,78 @@ def index_existing_sources(out_dir: Path) -> Dict[str, Path]:
     return sources
 
 
-def process_url(
-    url: str,
+def candidate_urls(url: str) -> List[str]:
+    """Generate fallback URLs for AMP cache links, mobile params, or http->https."""
+    candidates: List[str] = [url]
+    parsed = urllib.parse.urlsplit(url)
+
+    # 1. Google AMP cache: *.cdn.ampproject.org/v/s/<host>/<path>... and/or ampshare=
+    if "cdn.ampproject.org" in parsed.netloc.lower():
+        for part in (parsed.fragment, parsed.query):
+            m = re.search(r"ampshare=([^&]+)", part)
+            if m:
+                candidates.append(urllib.parse.unquote(m.group(1)))
+        amp_m = re.match(r"^/v/(s/)?([^/]+)(/.*)$", parsed.path)
+        if amp_m:
+            scheme = "https" if amp_m.group(1) else "http"
+            host = amp_m.group(2)
+            path = amp_m.group(3)
+            candidates.append(f"{scheme}://{host}{path}")
+            stripped_amp = re.sub(r"/amp/?$", "/", path)
+            if stripped_amp != path:
+                candidates.append(f"{scheme}://{host}{stripped_amp}")
+
+    # 2. Strip Blogger mobile ?m=1 or tracking fragments
+    if parsed.query:
+        qs = [
+            (k, v)
+            for k, v in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+            if k.lower() != "m"
+        ]
+        new_q = urllib.parse.urlencode(qs)
+        if new_q != parsed.query:
+            candidates.append(
+                urllib.parse.urlunsplit(
+                    (parsed.scheme, parsed.netloc, parsed.path, new_q, "")
+                )
+            )
+    if parsed.fragment:
+        candidates.append(
+            urllib.parse.urlunsplit(
+                (parsed.scheme, parsed.netloc, parsed.path, parsed.query, "")
+            )
+        )
+
+    # 3. http -> https fallback
+    if parsed.scheme.lower() == "http":
+        candidates.append(
+            urllib.parse.urlunsplit(
+                ("https", parsed.netloc, parsed.path, parsed.query, parsed.fragment)
+            )
+        )
+
+    seen = set()
+    unique: List[str] = []
+    for c in candidates:
+        if c and c not in seen:
+            seen.add(c)
+            unique.append(c)
+    return unique
+
+
+def save_recipe(
+    recipe: Dict[str, Any],
     out_dir: Path,
     images_subdir: str,
     download_images: bool,
     use_checkboxes: bool,
     overwrite: bool,
 ) -> Path:
-    print(f"Fetching: {url}")
-    raw_bytes = fetch_url(url)
-    raw_html = raw_bytes.decode("utf-8", errors="replace")
-    recipe = extract_recipe(url, raw_html)
-    if not recipe["ingredient_sections"] and not recipe["instructions"]:
-        raise ValueError("No ingredients or instructions could be extracted")
-
     slug = slugify(recipe["title"])
     md_path = out_dir / f"{slug}.md"
     if md_path.exists() and not overwrite:
         # Avoid silent overwrite if two distinct URLs share a title
-        suffix = abs(hash(url)) % 10000
+        suffix = abs(hash(recipe["url"])) % 10000
         md_path = out_dir / f"{slug}-{suffix}.md"
         slug = f"{slug}-{suffix}"
 
@@ -890,6 +942,110 @@ def process_url(
     md_path.write_text(md_content, encoding="utf-8")
     print(f"  Saved -> {md_path}")
     return md_path
+
+
+def parse_plain_text_recipe(
+    raw_text: str, source_url: str = "", title_override: Optional[str] = None
+) -> Dict[str, Any]:
+    """Parse pasted plain text (e.g. from a paywalled page) into a recipe dict."""
+    lines = [clean_whitespace(l) for l in raw_text.splitlines()]
+    lines = [l for l in lines if l]
+    if not lines:
+        raise ValueError("Input text is empty")
+
+    title = title_override or lines[0]
+    body_lines = lines if title_override else lines[1:]
+
+    ing_re = re.compile(r"^(?:ingredientes?|ingredients?)\b[:\s]*$", re.I)
+    inst_re = re.compile(
+        r"^(?:preparaci[oó]n|elaboraci[oó]n|instrucciones|instructions|method|directions)\b[:\s]*$",
+        re.I,
+    )
+
+    context_paragraphs: List[str] = []
+    ingredients: List[str] = []
+    instructions: List[str] = []
+
+    mode = "context"
+    for line in body_lines:
+        if ing_re.match(line):
+            mode = "ingredients"
+            continue
+        if inst_re.match(line):
+            mode = "instructions"
+            continue
+        if mode == "context":
+            context_paragraphs.append(line)
+        elif mode == "ingredients":
+            item = re.sub(r"^[-*•\[\]\s]+", "", line).strip()
+            if item:
+                ingredients.append(item)
+        elif mode == "instructions":
+            step = re.sub(r"^\d+[\.\)]\s*", "", line).strip()
+            if step:
+                instructions.append(step)
+
+    if not ingredients and not instructions:
+        # Treat remaining lines as context/instructions if no explicit headings were pasted
+        instructions = body_lines
+
+    return {
+        "title": title,
+        "description": None,
+        "url": source_url or "manual-input",
+        "author": None,
+        "date": None,
+        "servings": None,
+        "prep_time": None,
+        "cook_time": None,
+        "total_time": None,
+        "hero_image": None,
+        "inline_images": [],
+        "context_paragraphs": context_paragraphs,
+        "ingredient_sections": [(None, ingredients)] if ingredients else [],
+        "instructions": instructions,
+        "tags": ["receta"],
+    }
+
+
+def process_url(
+    url: str,
+    out_dir: Path,
+    images_subdir: str,
+    download_images: bool,
+    use_checkboxes: bool,
+    overwrite: bool,
+) -> Path:
+    print(f"Fetching: {url}")
+    last_exc: Optional[Exception] = None
+    recipe: Optional[Dict[str, Any]] = None
+    for idx, cand in enumerate(candidate_urls(url)):
+        if idx > 0:
+            print(f"  [alt-url] Trying {cand}")
+        try:
+            raw_bytes = fetch_url(cand)
+            raw_html = raw_bytes.decode("utf-8", errors="replace")
+            extracted = extract_recipe(cand, raw_html)
+            if not extracted["ingredient_sections"] and not extracted["instructions"]:
+                raise ValueError("No ingredients or instructions could be extracted")
+            extracted["url"] = url  # Keep original URL for duplicate-skipping
+            recipe = extracted
+            break
+        except Exception as exc:
+            last_exc = exc
+
+    if recipe is None:
+        assert last_exc is not None
+        raise last_exc
+
+    return save_recipe(
+        recipe=recipe,
+        out_dir=out_dir,
+        images_subdir=images_subdir,
+        download_images=download_images,
+        use_checkboxes=use_checkboxes,
+        overwrite=overwrite,
+    )
 
 
 def load_urls(args: argparse.Namespace) -> List[str]:
@@ -958,14 +1114,74 @@ def main() -> int:
         default="errors.txt",
         help="Path to write failed URLs (default: errors.txt).",
     )
+    parser.add_argument(
+        "--from-html",
+        help="Convert a locally saved HTML file (e.g. from a paywalled page) instead of fetching.",
+    )
+    parser.add_argument(
+        "--from-text",
+        help="Convert a plain-text file (copied recipe text) into Markdown.",
+    )
+    parser.add_argument(
+        "--paste",
+        action="store_true",
+        help="Read copied recipe text from stdin (press Ctrl+D when done).",
+    )
+    parser.add_argument(
+        "--url",
+        default="",
+        help="Source URL metadata when using --from-html, --from-text, or --paste.",
+    )
+    parser.add_argument(
+        "--title",
+        default=None,
+        help="Optional title override when using --from-text or --paste.",
+    )
     args = parser.parse_args()
+
+    out_dir = Path(args.output_dir).expanduser().resolve()
+
+    if args.from_html:
+        raw_html = Path(args.from_html).expanduser().read_text(
+            encoding="utf-8", errors="replace"
+        )
+        recipe = extract_recipe(args.url or args.from_html, raw_html)
+        save_recipe(
+            recipe=recipe,
+            out_dir=out_dir,
+            images_subdir=args.images_dir,
+            download_images=not args.no_download_images,
+            use_checkboxes=args.checkboxes,
+            overwrite=args.overwrite,
+        )
+        return 0
+
+    if args.from_text or args.paste:
+        if args.paste:
+            print("Paste recipe text below, then press Ctrl+D:")
+            raw_text = sys.stdin.read()
+        else:
+            raw_text = Path(args.from_text).expanduser().read_text(
+                encoding="utf-8", errors="replace"
+            )
+        recipe = parse_plain_text_recipe(
+            raw_text, source_url=args.url, title_override=args.title
+        )
+        save_recipe(
+            recipe=recipe,
+            out_dir=out_dir,
+            images_subdir=args.images_dir,
+            download_images=False,
+            use_checkboxes=args.checkboxes,
+            overwrite=args.overwrite,
+        )
+        return 0
 
     urls = load_urls(args)
     if not urls:
         parser.print_help()
         return 1
 
-    out_dir = Path(args.output_dir).expanduser().resolve()
     existing_sources = index_existing_sources(out_dir)
     succeeded = 0
     skipped = 0

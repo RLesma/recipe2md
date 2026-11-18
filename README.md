@@ -37,6 +37,12 @@ python3 recipe_to_md.py -o ~/path/to/ObsidianVault/Recetas \
 - `--checkboxes`: Use `- [ ]` checkboxes for ingredients instead of `-` bullets.
 - `--overwrite`: Overwrite existing `.md` files with the same filename.
 - `-e, --error-file`: File where failed URLs are saved (default: `errors.txt`). You can retry them later with `python3 recipe_to_md.py -f errors.txt`.
+- `--from-html <file.html>`: Convert a locally saved HTML page (great for paywalled or bot-blocked recipes you open in your browser and save with `Cmd+S`). Pair with `--url "<source>"` to record the source link.
+- `--from-text <file.txt>` / `--paste`: Convert copied plain text (from a file or pasted into stdin) into the same Obsidian Markdown format. Pair with `--url "<source>"` and optionally `--title "<title>"`.
+
+### Automatic Alternative URL Fallbacks
+
+If a URL fails, the script automatically tries clean fallback URLs (unwrapping Google AMP cache `cdn.ampproject.org` links via `ampshare=` or path, stripping `?m=1` / tracking fragments, and retrying `http://` as `https://`).
 
 ## Tips for Printing to PDF in Obsidian
 
